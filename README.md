@@ -1,36 +1,56 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Archive Beta
+
+Archive is a site-first AI fashion broker. A user uploads an outfit photo or writes a style brief, receives a structured audit, and gets shoppable recommendations.
 
 ## Getting Started
 
-First, run the development server:
+Run the app locally:
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Environment
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Minimum:
 
-## Learn More
+```bash
+GEMINI_API_KEY=...
+```
 
-To learn more about Next.js, take a look at the following resources:
+Optional search providers:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bash
+BRAVE_SEARCH_API_KEY=...
+GOOGLE_SEARCH_API_KEY=...
+GOOGLE_SEARCH_ENGINE_ID=...
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Brave Search is the preferred live product discovery provider. Google Custom
+Search JSON API only works for projects that already have access to that legacy
+API.
 
-## Deploy on Vercel
+## Product Retrieval
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+The product pipeline is intentionally staged:
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+1. the audit model returns `shopping_queries`, `recommended_categories`, and `missing_pieces`
+2. the server discovers candidate product URLs from search providers
+3. the server fetches those product pages directly
+4. product metadata is extracted from canonical links, Open Graph tags, and JSON-LD `Product` data
+5. weak candidates are discarded
+6. curated catalog products backfill gaps
+
+This is more reliable than asking a model to invent final product cards directly.
+
+## Verification
+
+Useful commands:
+
+```bash
+npm run lint
+npm run build
+```
