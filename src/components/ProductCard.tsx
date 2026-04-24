@@ -14,14 +14,36 @@ const priceFormatter = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 0,
 });
 
+function getProductSourceLabel(product: Product): string {
+  switch (product.source) {
+    case "live":
+      return product.match_quality === "near"
+        ? "Near live match"
+        : "Live search result";
+    case "catalog":
+      return product.provider_label || "Local catalog fallback";
+    case "affiliate":
+      return product.provider_label || "Affiliate feed";
+    case "ebay":
+      return product.provider_label || "eBay marketplace";
+    case "curated":
+      return "Curated fallback";
+    default:
+      return product.provider_label || "Live search result";
+  }
+}
+
 export default function ProductCard({
   product,
   onClickTrack,
 }: ProductCardProps) {
   const [imgError, setImgError] = useState(false);
   const hasImage = Boolean(product.image_url) && !imgError;
-  const sourceLabel =
-    product.source === "curated" ? "Curated fallback" : "Live search result";
+  const sourceLabel = getProductSourceLabel(product);
+  const missingPreferenceSummary =
+    product.match_quality === "near" && product.missing_preferences?.length
+      ? product.missing_preferences.slice(0, 2).join(", ")
+      : null;
 
   return (
     <a
@@ -85,6 +107,11 @@ export default function ProductCard({
         <h4 className="mt-3 text-lg font-semibold leading-7 tracking-[-0.04em] text-silver-strong">
           {product.title}
         </h4>
+        {missingPreferenceSummary ? (
+          <p className="mt-2 text-xs leading-5 text-[color:var(--foreground-soft)]">
+            Missing: {missingPreferenceSummary}
+          </p>
+        ) : null}
 
         <div className="mt-auto pt-5">
           <div className="flex items-center justify-between text-sm font-medium text-[color:var(--foreground-soft)] transition-colors duration-200 group-hover:text-silver-strong">

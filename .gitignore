@@ -23,6 +23,7 @@
 # misc
 .DS_Store
 *.pem
+archiv*.json
 
 # local agent planning/docs
 /AGENTIC/

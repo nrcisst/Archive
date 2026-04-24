@@ -4,10 +4,27 @@ import type { ChangeEvent, DragEvent } from "react";
 import { startTransition, useDeferredValue, useEffect, useRef, useState } from "react";
 import AuditCard from "@/components/AuditCard";
 import ProductCard from "@/components/ProductCard";
-import type { Product, StyleAudit } from "@/lib/types";
+import type {
+  Product,
+  ProductSearchProgressEvent,
+  ProductSearchStageId,
+  StyleAudit,
+} from "@/lib/types";
 
 type ViewState = "idle" | "photo" | "text" | "loading" | "result";
 type ImageUploadStatus = "idle" | "uploading" | "ready" | "error";
+
+type ProductSearchStreamEvent =
+  | ProductSearchProgressEvent
+  | { type: "result"; products: Product[] }
+  | { type: "error"; message: string };
+
+interface ProductSearchStage {
+  id: ProductSearchStageId;
+  label: string;
+  detail: string;
+  stat: string;
+}
 
 const samplePrompts = [
   "Quiet luxury dinner look under $200 with sharper accessories.",
@@ -51,6 +68,37 @@ const stageMeta: Record<
   },
 };
 
+const productSearchStages: ProductSearchStage[] = [
+  {
+    id: "intent",
+    label: "Reading the audit intent",
+    detail:
+      "Separating missing pieces from garments that are already working.",
+    stat: "Audit signals",
+  },
+  {
+    id: "discovery",
+    label: "Finding live candidates",
+    detail:
+      "Searching retailer pages for products that match the shopping direction.",
+    stat: "Live discovery",
+  },
+  {
+    id: "vetting",
+    label: "Vetting product pages",
+    detail:
+      "Checking each page for product evidence, price, image, retailer, and USD currency.",
+    stat: "Strict validation",
+  },
+  {
+    id: "fallback",
+    label: "Balancing the final grid",
+    detail:
+      "Adding curated fallback only where the live results are too light.",
+    stat: "Quality pass",
+  },
+];
+
 export default function Home() {
   const [view, setView] = useState<ViewState>("idle");
   const [textPrompt, setTextPrompt] = useState("");
@@ -61,6 +109,8 @@ export default function Home() {
   const [audit, setAudit] = useState<StyleAudit | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
   const [productsLoading, setProductsLoading] = useState(false);
+  const [productSearchProgress, setProductSearchProgress] =
+    useState<ProductSearchProgressEvent | null>(null);
   const [imageUploadId, setImageUploadId] = useState<string | null>(null);
   const [imageUploadStatus, setImageUploadStatus] =
     useState<ImageUploadStatus>("idle");
@@ -214,6 +264,12 @@ export default function Home() {
 
   const loadProducts = async (loadedAudit: StyleAudit) => {
     setProductsLoading(true);
+    setProductSearchProgress({
+      type: "progress",
+      stage: "intent",
+      status: "active",
+      detail: "Sending the audit signals to product search.",
+    });
 
     try {
       const response = await fetch("/api/products", {
@@ -221,23 +277,76 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           shopping_queries: loadedAudit.shopping_queries,
+          shopping_intents: loadedAudit.shopping_intents,
           recommended_categories: loadedAudit.recommended_categories,
           missing_pieces: loadedAudit.missing_pieces,
           what_works: loadedAudit.what_works,
           what_to_fix: loadedAudit.what_to_fix,
           budget,
+          stream: true,
         }),
       });
 
-      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(`Product search failed: ${response.status}`);
+      }
 
-      startTransition(() => {
-        setProducts(data.products || []);
-      });
+      const contentType = response.headers.get("content-type") || "";
+      if (response.body && contentType.includes("application/x-ndjson")) {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        const handleLine = (line: string) => {
+          const trimmed = line.trim();
+          if (!trimmed) {
+            return;
+          }
+
+          const event = JSON.parse(trimmed) as ProductSearchStreamEvent;
+          if (event.type === "progress") {
+            startTransition(() => {
+              setProductSearchProgress(event);
+            });
+          } else if (event.type === "result") {
+            startTransition(() => {
+              setProducts(event.products || []);
+            });
+          } else if (event.type === "error") {
+            console.warn("[products] stream warning:", event.message);
+          }
+        };
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (value) {
+            buffer += decoder.decode(value, { stream: !done });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() || "";
+            for (const line of lines) {
+              handleLine(line);
+            }
+          }
+
+          if (done) {
+            break;
+          }
+        }
+
+        if (buffer.trim()) {
+          handleLine(buffer);
+        }
+      } else {
+        const data = await response.json();
+        startTransition(() => {
+          setProducts(data.products || []);
+        });
+      }
     } catch (productError) {
       console.error("[products] load error:", productError);
       startTransition(() => {
         setProducts([]);
+        setProductSearchProgress(null);
       });
     } finally {
       startTransition(() => {
@@ -256,6 +365,7 @@ export default function Home() {
       setError(null);
       setProducts([]);
       setProductsLoading(false);
+      setProductSearchProgress(null);
     });
 
     try {
@@ -327,6 +437,7 @@ export default function Home() {
       setAudit(null);
       setProducts([]);
       setProductsLoading(false);
+      setProductSearchProgress(null);
       setImageUploadId(null);
       setImageUploadStatus("idle");
       setError(null);
@@ -545,6 +656,7 @@ export default function Home() {
                         onReset={handleReset}
                         products={displayedProducts}
                         productsLoading={productsLoading}
+                        productSearchProgress={productSearchProgress}
                       />
                     </div>
                   )}
@@ -1016,11 +1128,13 @@ function ResultStage({
   onReset,
   products,
   productsLoading,
+  productSearchProgress,
 }: {
   audit: StyleAudit;
   onReset: () => void;
   products: Product[];
   productsLoading: boolean;
+  productSearchProgress: ProductSearchProgressEvent | null;
 }) {
   return (
     <div className="grid gap-5">
@@ -1054,7 +1168,7 @@ function ResultStage({
         </div>
 
         {productsLoading ? (
-          <ProductsLoadingState />
+          <ProductsLoadingState progress={productSearchProgress} />
         ) : products.length > 0 ? (
           <div className="grid gap-4 sm:grid-cols-2 2xl:grid-cols-3">
             {products.map((product) => (
@@ -1090,21 +1204,159 @@ function ResultStage({
   );
 }
 
-function ProductsLoadingState() {
+function ProductsLoadingState({
+  progress,
+}: {
+  progress: ProductSearchProgressEvent | null;
+}) {
+  const reportedStageIndex = productSearchStages.findIndex(
+    (stage) => stage.id === progress?.stage
+  );
+  const activeStageIndex = reportedStageIndex >= 0 ? reportedStageIndex : 0;
+  const baseStage = productSearchStages[activeStageIndex];
+  const activeStage = {
+    ...baseStage,
+    detail: progress?.detail || baseStage.detail,
+  };
+
   return (
-    <div className="grid gap-4 sm:grid-cols-2">
-      {Array.from({ length: 4 }).map((_, index) => (
-        <div key={index} className="skeleton-card p-4">
-          <div className="skeleton-line h-64 rounded-[22px]" />
-          <div className="mt-4 space-y-3">
-            <div className="skeleton-line w-1/3" />
-            <div className="skeleton-line w-full" />
-            <div className="skeleton-line w-4/5" />
-            <div className="skeleton-line w-2/5" />
+    <div className="grid gap-4">
+      <div className="product-search-panel liquid-tile p-5 sm:p-6">
+        <div className="grid gap-5 lg:grid-cols-[minmax(0,0.82fr)_minmax(280px,1fr)] lg:items-center">
+          <div className="product-search-visual-wrap">
+            <ProductSearchVisual stage={activeStage.id} />
+          </div>
+
+          <div>
+            <p className="section-label">{activeStage.stat}</p>
+            <h4 className="mt-3 text-2xl font-semibold text-silver-strong">
+              {activeStage.label}
+            </h4>
+            <p className="mt-3 text-sm leading-7 text-[color:var(--foreground-soft)]">
+              {activeStage.detail}
+            </p>
+
+            <div className="mt-6 grid gap-2">
+              {productSearchStages.map((stage, index) => {
+                const isActive = index === activeStageIndex;
+                const isComplete =
+                  index < activeStageIndex ||
+                  (isActive && progress?.status === "complete");
+
+                return (
+                  <div
+                    key={stage.id}
+                    className={`product-search-step ${
+                      isActive ? "is-active" : ""
+                    } ${isComplete ? "is-complete" : ""}`}
+                  >
+                    <span className="product-search-step-marker" />
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-silver-strong">
+                        {stage.label}
+                      </p>
+                      <p className="mt-1 truncate text-xs text-[color:var(--silver-muted)]">
+                        {stage.stat}
+                      </p>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>
-      ))}
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2 2xl:grid-cols-3">
+        {Array.from({ length: 3 }).map((_, index) => (
+          <div key={index} className="skeleton-card p-4">
+            <div className="skeleton-line h-56 rounded-[22px]" />
+            <div className="mt-4 space-y-3">
+              <div className="skeleton-line w-1/3" />
+              <div className="skeleton-line w-full" />
+              <div className="skeleton-line w-4/5" />
+              <div className="skeleton-line w-2/5" />
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
+  );
+}
+
+function ProductSearchVisual({ stage }: { stage: ProductSearchStageId }) {
+  if (stage === "discovery") {
+    return (
+      <svg
+        role="img"
+        aria-label="Live product discovery animation"
+        viewBox="0 0 240 180"
+        className="product-search-visual"
+      >
+        <rect x="32" y="38" width="68" height="86" rx="12" className="search-card search-float" />
+        <rect x="136" y="58" width="68" height="86" rx="12" className="search-card search-float-delay" />
+        <path d="M100 74 C122 44 142 52 158 76" className="search-line search-dash" />
+        <path d="M94 108 C122 140 148 132 166 116" className="search-line search-dash-delay" />
+        <circle cx="66" cy="68" r="14" className="search-dot search-pulse" />
+        <circle cx="170" cy="92" r="14" className="search-dot search-pulse-delay" />
+        <path d="M56 99h32M56 111h24M160 122h28M160 134h20" className="search-ink" />
+      </svg>
+    );
+  }
+
+  if (stage === "vetting") {
+    return (
+      <svg
+        role="img"
+        aria-label="Product page vetting animation"
+        viewBox="0 0 240 180"
+        className="product-search-visual"
+      >
+        <rect x="42" y="30" width="156" height="120" rx="16" className="search-card" />
+        <rect x="58" y="48" width="52" height="64" rx="10" className="search-photo" />
+        <path d="M126 58h46M126 76h34M126 96h52M126 116h28" className="search-ink" />
+        <path d="M58 132h124" className="search-line" />
+        <path d="M70 128l9 9 18-21" className="search-check search-check-one" />
+        <path d="M128 128l9 9 18-21" className="search-check search-check-two" />
+        <path d="M34 46h172" className="search-sweep" />
+      </svg>
+    );
+  }
+
+  if (stage === "fallback") {
+    return (
+      <svg
+        role="img"
+        aria-label="Final product grid balancing animation"
+        viewBox="0 0 240 180"
+        className="product-search-visual"
+      >
+        <rect x="44" y="38" width="54" height="72" rx="12" className="search-card search-float" />
+        <rect x="102" y="58" width="54" height="72" rx="12" className="search-card search-float-delay" />
+        <rect x="160" y="42" width="36" height="58" rx="10" className="search-card search-soft-card" />
+        <path d="M58 124h126" className="search-line" />
+        <path d="M72 124v18M130 124v18M178 124v18" className="search-line" />
+        <circle cx="72" cy="146" r="7" className="search-dot search-pulse" />
+        <circle cx="130" cy="146" r="7" className="search-dot search-pulse-delay" />
+        <circle cx="178" cy="146" r="7" className="search-dot search-pulse-late" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg
+      role="img"
+      aria-label="Audit intent reading animation"
+      viewBox="0 0 240 180"
+      className="product-search-visual"
+    >
+      <rect x="54" y="30" width="96" height="126" rx="16" className="search-card search-float" />
+      <path d="M76 58h50M76 76h38M76 94h56M76 112h42" className="search-ink" />
+      <circle cx="158" cy="118" r="28" className="search-lens" />
+      <path d="M178 138l24 24" className="search-line search-handle" />
+      <path d="M62 86h92" className="search-sweep" />
+      <path d="M158 108l9 9 17-22" className="search-check search-check-one" />
+    </svg>
   );
 }
 

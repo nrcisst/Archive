@@ -17,6 +17,12 @@ export const PRODUCT_CATALOG: Product[] = [
     retailer: "COS",
     category: "outerwear",
     aesthetic: "minimalist",
+    style_profile: {
+      fit: "relaxed",
+      material: "linen",
+      structure: "unstructured",
+      weight: "lightweight",
+    },
   },
   {
     id: "out-002",
@@ -28,6 +34,12 @@ export const PRODUCT_CATALOG: Product[] = [
     retailer: "Arket",
     category: "outerwear",
     aesthetic: "casual",
+    style_profile: {
+      fit: "regular",
+      material: "cotton",
+      structure: "utility",
+      weight: "midweight",
+    },
   },
   {
     id: "out-003",
@@ -39,6 +51,12 @@ export const PRODUCT_CATALOG: Product[] = [
     retailer: "Reiss",
     category: "outerwear",
     aesthetic: "elevated",
+    style_profile: {
+      fit: "regular",
+      material: "wool",
+      structure: "tailored",
+      weight: "heavyweight",
+    },
   },
   {
     id: "out-004",
@@ -50,6 +68,11 @@ export const PRODUCT_CATALOG: Product[] = [
     retailer: "Levi's",
     category: "outerwear",
     aesthetic: "streetwear",
+    style_profile: {
+      fit: "cropped",
+      material: "denim",
+      structure: "structured",
+    },
   },
 
   // ── Tops ────────────────────────────────────────────
@@ -63,6 +86,12 @@ export const PRODUCT_CATALOG: Product[] = [
     retailer: "NN07",
     category: "tops",
     aesthetic: "minimalist",
+    style_profile: {
+      fit: "regular",
+      material: "knit",
+      texture: "textured",
+      neckline: "collared",
+    },
   },
   {
     id: "top-002",
@@ -74,6 +103,13 @@ export const PRODUCT_CATALOG: Product[] = [
     retailer: "Lady White Co",
     category: "tops",
     aesthetic: "casual",
+    style_profile: {
+      fit: "regular",
+      material: "cotton",
+      neckline: "crew",
+      sleeve: "short sleeve",
+      texture: "plain",
+    },
   },
   {
     id: "top-003",
@@ -85,6 +121,12 @@ export const PRODUCT_CATALOG: Product[] = [
     retailer: "Everlane",
     category: "tops",
     aesthetic: "minimalist",
+    style_profile: {
+      fit: "regular",
+      material: "wool",
+      neckline: "crew",
+      sleeve: "long sleeve",
+    },
   },
 
   // ── Pants ───────────────────────────────────────────
@@ -98,6 +140,12 @@ export const PRODUCT_CATALOG: Product[] = [
     retailer: "Uniqlo",
     category: "pants",
     aesthetic: "casual",
+    style_profile: {
+      fit: "relaxed",
+      leg: "tapered",
+      material: "cotton",
+      finish: "clean",
+    },
   },
   {
     id: "pan-002",
@@ -109,6 +157,11 @@ export const PRODUCT_CATALOG: Product[] = [
     retailer: "AMI Paris",
     category: "pants",
     aesthetic: "elevated",
+    style_profile: {
+      fit: "straight",
+      material: "wool",
+      finish: "pleated",
+    },
   },
   {
     id: "pan-003",
@@ -120,6 +173,30 @@ export const PRODUCT_CATALOG: Product[] = [
     retailer: "Banana Republic",
     category: "pants",
     aesthetic: "elevated",
+    style_profile: {
+      fit: "straight",
+      color: "charcoal",
+      material: "corduroy",
+      finish: "clean",
+    },
+  },
+  {
+    id: "pan-004",
+    title: "Clean Black Slim Jeans",
+    brand: "Levi's",
+    price: 98,
+    image_url: "https://images.unsplash.com/photo-1542272604-787c3835535d?w=400&h=500&fit=crop",
+    product_url: "https://www.levi.com/US/en_US/clothing/men/jeans/c/levi_clothing_men_jeans",
+    retailer: "Levi's",
+    category: "pants",
+    aesthetic: "streetwear",
+    style_profile: {
+      fit: "slim",
+      color: "black",
+      material: "denim",
+      finish: "clean",
+      avoid_finish: ["distressed"],
+    },
   },
 
   // ── Shoes ───────────────────────────────────────────
@@ -133,6 +210,13 @@ export const PRODUCT_CATALOG: Product[] = [
     retailer: "Common Projects",
     category: "shoes",
     aesthetic: "minimalist",
+    style_profile: {
+      color: "white",
+      silhouette: "low-top",
+      material: "leather",
+      sole: "thin",
+      finish: "minimal",
+    },
   },
   {
     id: "sho-002",
@@ -144,6 +228,12 @@ export const PRODUCT_CATALOG: Product[] = [
     retailer: "Clarks",
     category: "shoes",
     aesthetic: "elevated",
+    style_profile: {
+      color: "brown",
+      silhouette: "boot",
+      material: "suede",
+      toe: "almond",
+    },
   },
 
   // ── Accessories ─────────────────────────────────────
@@ -157,6 +247,11 @@ export const PRODUCT_CATALOG: Product[] = [
     retailer: "Junghans",
     category: "accessories",
     aesthetic: "minimalist",
+    style_profile: {
+      material: "leather",
+      finish: "minimal",
+      placement: "wrist",
+    },
   },
   {
     id: "acc-002",
@@ -168,6 +263,31 @@ export const PRODUCT_CATALOG: Product[] = [
     retailer: "Miansai",
     category: "accessories",
     aesthetic: "minimalist",
+    style_profile: {
+      color: "silver",
+      material: "silver",
+      scale: "medium",
+      placement: "wrist",
+      finish: "polished",
+    },
+  },
+  {
+    id: "acc-005",
+    title: "Sterling Silver Chain Necklace",
+    brand: "Miansai",
+    price: 165,
+    image_url: "https://images.unsplash.com/photo-1611652022419-a9419f74343d?w=400&h=500&fit=crop",
+    product_url: "https://www.miansai.com/collections/mens-necklaces",
+    retailer: "Miansai",
+    category: "accessories",
+    aesthetic: "minimalist",
+    style_profile: {
+      color: "silver",
+      material: "silver",
+      scale: "thin",
+      placement: "neck",
+      finish: "polished",
+    },
   },
   {
     id: "acc-003",
@@ -179,6 +299,12 @@ export const PRODUCT_CATALOG: Product[] = [
     retailer: "Anderson's",
     category: "accessories",
     aesthetic: "casual",
+    style_profile: {
+      color: "brown",
+      material: "leather",
+      placement: "waist",
+      finish: "textured",
+    },
   },
   {
     id: "acc-004",
@@ -190,5 +316,11 @@ export const PRODUCT_CATALOG: Product[] = [
     retailer: "Aer",
     category: "accessories",
     aesthetic: "streetwear",
+    style_profile: {
+      color: "black",
+      material: "nylon",
+      placement: "crossbody",
+      finish: "technical",
+    },
   },
 ];

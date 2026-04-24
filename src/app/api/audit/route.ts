@@ -1,13 +1,26 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
-import { parseAuditResponse } from "@/lib/schema";
+import { GeminiAuditResponseSchema, parseAuditResponse } from "@/lib/schema";
 import { buildTextPrompt, buildImagePrompt } from "@/lib/prompt-builder";
 import { MOCK_AUDIT } from "@/lib/mock-data";
 import { getImageUpload, parseImageDataUrl } from "@/lib/image-upload-cache";
-
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
+import {
+  createGeminiModel,
+  hasGeminiCredentials,
+  type GeminiContent,
+} from "@/lib/gemini";
 
 const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 2000;
+const AUDIT_JSON_GENERATION_CONFIG = {
+  candidateCount: 1,
+  maxOutputTokens: 8192,
+  responseMimeType: "application/json",
+  temperature: 0,
+} as const;
+const AUDIT_GENERATION_CONFIG = {
+  ...AUDIT_JSON_GENERATION_CONFIG,
+  responseSchema: GeminiAuditResponseSchema,
+} as const;
+type GeminiContentRequest = GeminiContent;
 
 /**
  * Extract retry delay from a Gemini 429 error, if available.
@@ -66,6 +79,18 @@ function is429Error(error: unknown): boolean {
   );
 }
 
+function isSchemaConstraintError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const errObj = error as Record<string, unknown>;
+  const message = String(errObj.message || "").toLowerCase();
+
+  return (
+    (errObj.status === 400 || message.includes("400 bad request")) &&
+    message.includes("schema") &&
+    message.includes("too many states")
+  );
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -121,12 +146,33 @@ export async function POST(request: Request) {
     }
 
     // Check API key
-    if (!process.env.GEMINI_API_KEY) {
-      console.warn("[audit] No GEMINI_API_KEY, returning mock data");
+    if (!(await hasGeminiCredentials())) {
+      console.warn("[audit] No Gemini credentials, returning mock data");
       return Response.json({ audit: MOCK_AUDIT });
     }
 
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+    const model = createGeminiModel({
+      model: "gemini-2.5-flash",
+      generationConfig: AUDIT_GENERATION_CONFIG,
+    });
+    const jsonModeModel = createGeminiModel({
+      model: "gemini-2.5-flash",
+      generationConfig: AUDIT_JSON_GENERATION_CONFIG,
+    });
+    const generateAuditContent = async (content: GeminiContentRequest) => {
+      try {
+        return await callWithRetry(() => model.generateContent(content));
+      } catch (error) {
+        if (!isSchemaConstraintError(error)) {
+          throw error;
+        }
+
+        console.warn(
+          "[audit] Gemini response schema rejected by serving, retrying with JSON mode"
+        );
+        return callWithRetry(() => jsonModeModel.generateContent(content));
+      }
+    };
 
     let result;
     const uploadedImage = image_upload_id
@@ -149,7 +195,7 @@ export async function POST(request: Request) {
 
     if (imagePayload) {
       // Image flow: send image + prompt to Gemini vision
-      const imagePrompt = buildImagePrompt(occasion, budget);
+      const imagePrompt = buildImagePrompt(prompt, occasion, budget);
 
       console.log("[audit] Using image input", {
         source: uploadedImage ? "pre-upload" : "request-body",
@@ -157,23 +203,19 @@ export async function POST(request: Request) {
         mimeType: imagePayload.mimeType,
       });
 
-      result = await callWithRetry(() =>
-        model.generateContent([
-          imagePrompt,
-          {
-            inlineData: {
-              mimeType: imagePayload.mimeType,
-              data: imagePayload.base64Data,
-            },
+      result = await generateAuditContent([
+        imagePrompt,
+        {
+          inlineData: {
+            mimeType: imagePayload.mimeType,
+            data: imagePayload.base64Data,
           },
-        ])
-      );
+        },
+      ]);
     } else {
       // Text-only flow
       const textPrompt = buildTextPrompt(prompt!, occasion, budget);
-      result = await callWithRetry(() =>
-        model.generateContent(textPrompt)
-      );
+      result = await generateAuditContent(textPrompt);
     }
 
     const responseText = result.response.text();
@@ -187,6 +229,32 @@ export async function POST(request: Request) {
       console.error("[audit] Raw response:", responseText.slice(0, 500));
       return Response.json({ audit: MOCK_AUDIT, _fallback: true });
     }
+
+    console.log("[audit] Parsed audit shopping signals", {
+      score: audit.score,
+      aestheticRead: audit.aesthetic_read,
+      whatWorks: audit.what_works.length,
+      whatToFix: audit.what_to_fix.length,
+      missingPieces: audit.missing_pieces.length,
+      styleActions: audit.style_actions.map((action) => ({
+        id: action.id,
+        action: action.action,
+        target: action.target_item,
+        category: action.target_category,
+        shoppable: action.shoppable,
+        shoppingIntentId: action.shopping_intent_id || null,
+      })),
+      shoppingIntents: audit.shopping_intents.map((intent) => ({
+        id: intent.id,
+        styleActionId: intent.style_action_id || null,
+        category: intent.category,
+        productType: intent.product_type,
+        styleProfile: intent.style_profile,
+        query: intent.search_query,
+        alternateQueries: intent.alternate_queries.length,
+        priority: intent.priority,
+      })),
+    });
 
     return Response.json({ audit });
   } catch (error) {

@@ -21,11 +21,23 @@ Use `npm run lint` and `npx tsc --noEmit` after TypeScript or route-handler chan
 
 ## Environment Variables
 
-Required:
+Required Gemini auth, choose one:
 
 ```bash
 GEMINI_API_KEY=...
 ```
+
+or Vertex AI service-account auth:
+
+```bash
+GOOGLE_APPLICATION_CREDENTIALS=./archive-494221-ae348152ea89.json
+GOOGLE_CLOUD_PROJECT=archive-494221
+GOOGLE_CLOUD_LOCATION=global
+```
+
+If `GOOGLE_APPLICATION_CREDENTIALS` is omitted locally, the server also checks
+for a root-level `archiv*.json` service-account file and prefers it over
+`GEMINI_API_KEY`.
 
 Preferred live search provider:
 
@@ -33,23 +45,34 @@ Preferred live search provider:
 BRAVE_SEARCH_API_KEY=...
 ```
 
-Legacy optional provider:
-
-```bash
-GOOGLE_SEARCH_API_KEY=...
-GOOGLE_SEARCH_ENGINE_ID=...
-```
-
-Google Custom Search JSON API is legacy for this project. New Google Cloud projects may return `403` with `This project does not have the access to Custom Search JSON API.` Do not assume Google CSE is available.
+Google Custom Search JSON API is currently disabled in the product-search pipeline. Do not assume Google CSE is available.
 
 ## Core Flow
 
 1. The client sends audit input to `src/app/api/audit/route.ts`.
 2. Photo uploads start early through `src/app/api/uploads/route.ts`; `/api/audit` should prefer `image_upload_id` and fall back to inline `image_base64`.
-3. Gemini returns a structured `StyleAudit`.
-4. The client sends `shopping_queries`, `recommended_categories`, `missing_pieces`, `what_works`, and `what_to_fix` to `src/app/api/products/route.ts`.
-5. `src/lib/product-search.ts` discovers live product candidates, fetches candidate pages server-side, and rejects weak pages.
+3. Gemini returns a structured `StyleAudit` with variable-count `shopping_intents`.
+4. The client sends `shopping_intents`, `shopping_queries`, `recommended_categories`, `missing_pieces`, `what_works`, and `what_to_fix` to `src/app/api/products/route.ts`.
+5. `src/lib/product-search.ts` builds searches from `shopping_intents` first, discovers live product candidates, fetches candidate pages server-side, and rejects weak pages.
 6. `src/lib/recommendations.ts` adds limited curated fallback products only when they match the actual shopping intent.
+
+## Shopping Intent Contract
+
+`shopping_intents` is the product-search source of truth. The legacy flat arrays still exist for UI/backward compatibility, but search should not infer intent from prose when a structured intent is available.
+
+Each intent should describe one item worth shopping:
+
+- `category`: one of `outerwear`, `tops`, `pants`, `shoes`, `accessories`
+- `product_type`: non-negotiable product identity, such as `sneakers`, `chain necklace`, `beanie`, or `corduroy pants`
+- `display_label`: human-readable card/audit label
+- `search_query`: concise retail search phrase used first
+- `alternate_queries`: 0-2 alternate retail phrases for the same item only
+- `required_terms`: identity terms the validated product should satisfy
+- `optional_terms`: style, fit, color, material, or vibe terms
+- `avoid_terms`: obvious bad matches such as `pattern`, `tutorial`, `fabric`, `guide`, `article`, or `blog`
+- `replaces_visible_item`: true only when the intent is replacing a visible garment
+
+The model should return only as many intents as the outfit actually needs, usually 1-5. Do not add filler intents to reach a fixed card count.
 
 ## Product Search Principles
 
@@ -60,8 +83,9 @@ Google Custom Search JSON API is legacy for this project. New Google Cloud proje
 - Broad web search is noisy. Treat Brave as candidate discovery, not truth.
 - Gemini should generate audit intent and fallback URL candidates only. It should not be trusted as the final product source.
 - Use `what_works` as a protection signal. Do not shop for garments that are already working unless replacement is explicitly justified.
-- Use `missing_pieces` and `shopping_queries` as the primary shopping intent.
+- Use `shopping_intents` as the primary shopping intent. Fall back to `shopping_queries` and `missing_pieces` only for older responses.
 - Do not let one category dominate the grid. The current search code caps repeated category queries and diversifies final products.
+- Search all primary intent queries first. Use `alternate_queries` only as extra retrieval coverage for the same exact item.
 
 ## Live Product Vetting
 
@@ -79,13 +103,15 @@ Useful log lines:
 ```text
 [product-search] Brave Search starting
 [product-search] Brave Search query complete
+[product-search] Candidate discovery complete
 [product-search] Candidate rejected after fetch
 [product-search] Candidate accepted
+[product-search] Live products before diversity
 [product-search] Category diversity applied
 [products] Product response ready
 ```
 
-Every rejection should include a `reason` so search quality can be tuned from logs.
+Every rejection should include a compact `reason`, provider, URL, intent/category context, and any currency/type evidence needed to tune search quality. Avoid noisy full candidate dumps unless actively debugging.
 
 ## Curated Fallback
 
@@ -94,8 +120,9 @@ Curated fallback lives in `src/data/products.ts` and is ranked by `src/lib/recom
 Rules:
 
 - Fallback must be labeled as fallback in the UI.
-- Fallback should match `missing_pieces` and `shopping_queries`, not broad categories alone.
+- Fallback should match `shopping_intents` when present, not broad categories alone.
 - Fallback should return a small number of high-intent products instead of padding to six.
+- If live search returns at least one vetted product, curated backfill should stay small.
 - Expanding the curated catalog is currently more valuable than trying to make open-web search perfect.
 
 ## Next.js Docs To Read Before Code Changes
