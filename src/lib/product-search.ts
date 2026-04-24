@@ -41,6 +41,8 @@ interface SearchQuery {
 
 interface ProductCandidate {
   url: string;
+  candidateKind?: "product" | "discovery-page";
+  discoveryParentUrl?: string;
   titleHint?: string;
   retailerHint?: string;
   imageHint?: string;
@@ -79,6 +81,7 @@ interface ProductCandidateRejectionLog {
   reason: string;
   provider: SearchProviderName;
   url: string;
+  candidateKind?: "product" | "discovery-page";
   category: string;
   querySource: SearchQuerySource;
   querySourceIndex: number;
@@ -92,18 +95,18 @@ interface ProductCandidateRejectionLog {
 
 type ProductCandidateIntentMatch =
   | {
-      quality: "exact" | "near";
-      matchReasons: string[];
-      missingPreferences: string[];
-      matchedDescriptors: string[];
-      descriptorTokens: string[];
-    }
+    quality: "exact" | "near";
+    matchReasons: string[];
+    missingPreferences: string[];
+    matchedDescriptors: string[];
+    descriptorTokens: string[];
+  }
   | {
-      quality: "reject";
-      reason: string;
-      matchedDescriptors: string[];
-      descriptorTokens: string[];
-    };
+    quality: "reject";
+    reason: string;
+    matchedDescriptors: string[];
+    descriptorTokens: string[];
+  };
 
 const CANDIDATE_REJECTION_LOG_SAMPLE_SIZE = 3;
 
@@ -143,29 +146,56 @@ const BLOCKED_HOST_SNIPPETS = [
   "twitter.com",
   "yelp.com",
   "linktr.ee",
+  "attn.tv",
+  "usablenet.com",
 ];
 
 const EDITORIAL_HOST_SNIPPETS = [
   "bloggers.feedspot.com",
   "denimhunters.com",
+  "darngoodyarn.com",
   "elpais.com",
   "esquire.com",
   "fashionbeans.com",
   "feedspot.com",
+  "fiberartsy.com",
   "forbes.com",
+  "gathered.how",
+  "goldenlucycrafts.com",
   "goodhousekeeping.com",
   "gq.com",
+  "handylittleme.com",
   "highsnobiety.com",
+  "hookedonhomemadehappiness.com",
   "idiva.com",
   "blog.inspireuplift.com",
+  "lovelifeyarn.com",
+  "madefromyarn.com",
+  "makeanddocrew.com",
   "menshealth.com",
+  "mooglyblog.com",
+  "muellerundsohn.com",
+  "nimble-needles.com",
   "nytimes.com",
+  "onlineclothingstudy.com",
+  "primermagazine.com",
+  "pouted.com",
+  "rohnstrong.com",
+  "ropedye.com",
   "rollingstone.com",
+  "sewrella.com",
+  "stylegirlfriend.com",
   "stylecaster.com",
   "themanual.com",
   "theguardian.com",
   "themomedit.com",
+  "thecrochetcrowd.com",
   "vogue.com",
+  "woolandthegang.com",
+  "yarnspirations.com",
+  "tipnut.com",
+  "whowhatwear.com",
+  "wildemasche.com",
 ];
 
 const RETAILER_HOST_SNIPPETS = [
@@ -295,6 +325,8 @@ const RETAILER_SITE_OPERATORS_BY_CATEGORY: Record<string, string[]> = {
 const MARKETPLACE_SITE_OPERATORS = [
   "site:grailed.com",
   "site:etsy.com",
+  "site:depop.com",
+  "site:ebay.com/itm/",
 ] as const;
 
 const FETCH_HEADERS = {
@@ -361,6 +393,30 @@ const PRODUCT_PATH_SNIPPETS = [
   "/prod/",
 ];
 
+const LISTING_SEGMENT_PATTERN =
+  /^(accessories|beanies|boots|caps|coats|denim-jackets|hats|hoodies|jackets|jeans|loafers|pants|shirts|sneakers|socks|sunglasses|sweaters|tees|trousers)(?:-\d+)?(?:\.aspx)?$/;
+
+const DISCOVERY_LISTING_PATH_SNIPPETS = [
+  "/browse/",
+  "/brand/",
+  "/brands/",
+  "/c/",
+  "/cat/",
+  "/category/",
+  "/categories/",
+  "/collection/",
+  "/collections/",
+  "/designer/",
+  "/designers/",
+  "/facets/",
+  "/market/",
+  "/shop/",
+  "/shops/",
+];
+
+const ASSET_URL_EXTENSION_PATTERN =
+  /\.(?:avif|css|gif|ico|jpeg|jpg|js|json|map|png|svg|webp)(?:[?#]|$)/i;
+
 const NON_WEARABLE_PRODUCT_PATTERNS = [
   /\bsewing\s+patterns?\b/i,
   /\bpdf\s+patterns?\b/i,
@@ -368,8 +424,13 @@ const NON_WEARABLE_PRODUCT_PATTERNS = [
   /\bpatterns?\b/i,
   /\btemplates?\b/i,
   /\bfabric\b/i,
+  /\bcrochet\b/i,
+  /\bknitting\b/i,
+  /\byarn\b/i,
   /\byardage\b/i,
   /\bnotions?\b/i,
+  /\bdiy\b/i,
+  /\btutorials?\b/i,
   /\bsewing\s+kit\b/i,
   /\bknitting\s+patterns?\b/i,
   /\bcrochet\s+patterns?\b/i,
@@ -482,7 +543,11 @@ const PRODUCT_SUBTYPE_TERMS: Array<{ subtype: string; terms: string[] }> = [
 
 const BRAVE_SEARCH_QUERY_MAX_LENGTH = 380;
 const CANDIDATE_FETCH_TIMEOUT_MS = 5000;
-const SELECTED_CANDIDATE_LIMIT = 36;
+const SELECTED_CANDIDATE_LIMIT = 48;
+const DISCOVERY_PAGE_EXPANSION_LIMIT = 6;
+const DISCOVERY_PAGE_LINK_LIMIT = 6;
+const VALIDATION_CANDIDATE_LIMIT = 60;
+const VALIDATION_CANDIDATE_HOST_LIMIT = 4;
 const BRAVE_RESULTS_PER_QUERY = "20";
 const MAX_SEARCH_QUERIES = 8;
 const RETAILER_SITE_QUERY_LIMIT = 4;
@@ -737,7 +802,7 @@ async function getGoogleCseSkipReason(
 
   if (!googleCseProbePromise) {
     googleCseProbePromise = (async () => {
-      const searchParams = new URLSearchParams({
+    const searchParams = new URLSearchParams({
         key: apiKey,
         cx: engineId,
         q: "test",
@@ -790,9 +855,8 @@ async function getGoogleCseSkipReason(
 
         return reason;
       } catch (error) {
-        const reason = `google_cse_probe_failed_${
-          error instanceof Error ? error.name : typeof error
-        }`;
+        const reason = `google_cse_probe_failed_${error instanceof Error ? error.name : typeof error
+          }`;
         console.warn("[product-search] Google CSE unavailable", { reason });
         return reason;
       }
@@ -849,7 +913,7 @@ const GENERIC_IDENTITY_TERMS = new Set([
   "tops",
 ]);
 
-const WEAK_DESCRIPTOR_TERMS = new Set(["dark", "light", "men", "mens"]);
+const WEAK_DESCRIPTOR_TERMS = new Set(["dark", "light", "men", "mens", "mid"]);
 
 const SEARCH_TERM_ALIASES: Record<string, string[]> = {
   "chain necklace": ["chain necklace", "chain necklaces"],
@@ -939,6 +1003,7 @@ const IMPORTANT_DESCRIPTOR_TERMS = [
   "gray",
   "olive",
   "indigo",
+  "gold",
   "silver",
   "white",
   "navy",
@@ -951,6 +1016,7 @@ const IMPORTANT_DESCRIPTOR_TERMS = [
   "stretch",
   "clean",
   "thin",
+  "medium",
   "delicate",
   "relaxed",
   "loose",
@@ -976,12 +1042,39 @@ const COLOR_DESCRIPTOR_TERMS = new Set([
   "gray",
   "olive",
   "indigo",
+  "gold",
   "silver",
   "white",
   "navy",
   "brown",
   "cream",
 ]);
+
+const FIT_DESCRIPTOR_CONFLICTS: Record<string, string[]> = {
+  straight: ["skinny", "slim", "wide", "flared", "bootcut", "relaxed", "loose"],
+  skinny: ["straight", "wide", "flared", "relaxed", "loose"],
+  slim: ["wide", "flared", "relaxed", "loose"],
+  tapered: ["wide", "flared", "bootcut"],
+  wide: ["skinny", "slim", "straight", "tapered"],
+  flared: ["skinny", "slim", "straight", "tapered"],
+  relaxed: ["skinny", "slim"],
+  loose: ["skinny", "slim"],
+};
+
+const MATERIAL_DESCRIPTOR_CONFLICTS: Record<string, string[]> = {
+  denim: ["cotton twill", "leather", "nylon", "wool", "suede", "canvas"],
+  leather: ["denim", "canvas", "nylon", "wool"],
+  wool: ["denim", "leather", "nylon", "canvas"],
+  nylon: ["denim", "leather", "wool", "suede"],
+  suede: ["denim", "canvas", "nylon"],
+};
+
+const SCALE_DESCRIPTOR_CONFLICTS: Record<string, string[]> = {
+  thin: ["medium", "chunky", "oversized"],
+  medium: ["thin", "chunky", "oversized"],
+  chunky: ["thin", "medium", "delicate"],
+  delicate: ["chunky", "oversized"],
+};
 
 const HARD_IDENTITY_PHRASES = [
   "chain necklace",
@@ -1186,23 +1279,12 @@ function hasSearchLikePath(value: string): boolean {
     const hasProductPathSignal = PRODUCT_PATH_SNIPPETS.some((snippet) =>
       pathname.includes(snippet)
     );
-    const listingSegmentPattern =
-      /^(accessories|beanies|boots|caps|coats|denim-jackets|hats|hoodies|jackets|jeans|loafers|pants|shirts|sneakers|socks|sunglasses|sweaters|tees|trousers)(?:-\d+)?(?:\.aspx)?$/;
     const listingPathSignal =
       pathname.endsWith(".zso") ||
       pathname.startsWith("/s/") ||
-      pathname.includes("/browse/") ||
-      pathname.includes("/brand/") ||
-      pathname.includes("/brands/") ||
-      pathname.includes("/c/") ||
-      pathname.includes("/cat/") ||
-      pathname.includes("/category/") ||
-      pathname.includes("/categories/") ||
-      pathname.includes("/collection/") ||
-      pathname.includes("/collections/") ||
-      pathname.includes("/designer/") ||
-      pathname.includes("/designers/") ||
-      pathname.includes("/facets/");
+      DISCOVERY_LISTING_PATH_SNIPPETS.some((snippet) =>
+        pathname.includes(snippet)
+      );
 
     return (
       pathname === "/" ||
@@ -1210,7 +1292,7 @@ function hasSearchLikePath(value: string): boolean {
       pathname.includes("/search/") ||
       (pathname.includes("/shopping/") && pathname.endsWith("/items.aspx")) ||
       ((segments.includes("men") || segments.includes("mens")) &&
-        listingSegmentPattern.test(lastSegment) &&
+        LISTING_SEGMENT_PATTERN.test(lastSegment) &&
         !hasProductPathSignal) ||
       (!hasProductPathSignal && listingPathSignal) ||
       pathname === "/shop" ||
@@ -1221,6 +1303,42 @@ function hasSearchLikePath(value: string): boolean {
     );
   } catch {
     return true;
+  }
+}
+
+function isDiscoveryListingPath(value: string): boolean {
+  try {
+    const url = new URL(value);
+    const pathname = url.pathname.toLowerCase();
+    const segments = pathname.split("/").filter(Boolean);
+    const lastSegment = segments.at(-1) || "";
+
+    if (
+      pathname === "/" ||
+      pathname === "/shop" ||
+      pathname === "/shop/" ||
+      pathname.startsWith("/search") ||
+      pathname.includes("/search/") ||
+      url.searchParams.has("q") ||
+      url.searchParams.has("query") ||
+      url.searchParams.has("search") ||
+      hasProductLikePath(value)
+    ) {
+      return false;
+    }
+
+    return (
+      pathname.endsWith(".zso") ||
+      pathname.startsWith("/s/") ||
+      (pathname.includes("/shopping/") && pathname.endsWith("/items.aspx")) ||
+      DISCOVERY_LISTING_PATH_SNIPPETS.some((snippet) =>
+        pathname.includes(snippet)
+      ) ||
+      ((segments.includes("men") || segments.includes("mens")) &&
+        LISTING_SEGMENT_PATTERN.test(lastSegment))
+    );
+  } catch {
+    return false;
   }
 }
 
@@ -1244,11 +1362,67 @@ function hasEditorialPath(value: string): boolean {
 
 function hasProductLikePath(value: string): boolean {
   try {
-    const pathname = new URL(value).pathname.toLowerCase();
-    return PRODUCT_PATH_SNIPPETS.some((snippet) => pathname.includes(snippet));
+    const url = new URL(value);
+    const pathname = url.pathname.toLowerCase();
+    return (
+      PRODUCT_PATH_SNIPPETS.some((snippet) => pathname.includes(snippet)) ||
+      hasRetailProductSlugPathSignal(url)
+    );
   } catch {
     return false;
   }
+}
+
+function hasRetailProductSlugPathSignal(url: URL): boolean {
+  const value = url.toString();
+  if (!hasRetailerHost(value)) {
+    return false;
+  }
+
+  const segments = url.pathname.toLowerCase().split("/").filter(Boolean);
+  const lastSegment = segments.at(-1) || "";
+  if (!lastSegment || LISTING_SEGMENT_PATTERN.test(lastSegment)) {
+    return false;
+  }
+
+  const normalizedPath = normalizeSearchText(url.pathname);
+  const productTermSignal = [
+    "anorak",
+    "beanie",
+    "blazer",
+    "boot",
+    "cap",
+    "chain",
+    "chino",
+    "coat",
+    "denim",
+    "hat",
+    "jacket",
+    "jean",
+    "jeans",
+    "necklace",
+    "pant",
+    "pants",
+    "ring",
+    "shirt",
+    "sneaker",
+    "sock",
+    "socks",
+    "sweater",
+    "tee",
+    "trouser",
+    "trousers",
+  ].some((term) => containsSearchTerm(normalizedPath, term));
+  const skuSignal =
+    lastSegment
+      .split(/[-_]/)
+      .some((part) => /[a-z]/.test(part) && /\d/.test(part) && part.length >= 5) ||
+    /(?:^|[-_])(?:[a-z]{1,5}\d{3,}|\d{4,}|[a-z0-9]*\d{3,}[a-z0-9]*)(?:$|[-_])/.test(
+      lastSegment
+    );
+  const descriptiveSlugSignal = lastSegment.split(/[-_]/).length >= 3;
+
+  return productTermSignal && skuSignal && descriptiveSlugSignal;
 }
 
 function hasUnavailableSignal(html: string, title: string | null): boolean {
@@ -1258,6 +1432,30 @@ function hasUnavailableSignal(html: string, title: string | null): boolean {
   return (
     /\b(404|page not found|product not found|not available|no longer available|does not exist|we can't find|we could not find)\b/.test(titleText) ||
     /\b(page not found|product not found|this product is no longer available|this item is no longer available|sorry, we can't find|sorry, we could not find|does not exist)\b/.test(textSample)
+  );
+}
+
+function hasBadProductTitleSignal(title: string | null): boolean {
+  const normalized = normalizeSearchText(title || "");
+  return (
+    normalized === "flyouterror" ||
+    normalized === "robot check" ||
+    normalized === "captcha" ||
+    normalized === "access denied" ||
+    normalized === "forbidden" ||
+    normalized === "request blocked"
+  );
+}
+
+function hasEditorialTitleSignal(title: string | null): boolean {
+  const normalized = normalizeSearchText(title || "");
+  return (
+    Boolean(normalized) &&
+    (normalized.includes(" the journal ") ||
+      normalized.endsWith(" the journal") ||
+      /\b(?:how|ways?|what|when)\s+to\s+wear\b/.test(normalized) ||
+      /\b(?:style|shopping|gift|trend)\s+guide\b/.test(normalized) ||
+      /\b(?:review|reviews|editorial|magazine|article)\b/.test(normalized))
   );
 }
 
@@ -1292,8 +1490,13 @@ function buildProductDiscoveryQueries(query: SearchQuery): string[] {
     "-site:yelp.com",
     "-blog",
     "-best",
+    "-crochet",
+    "-diy",
     "-guide",
+    "-knitting",
     "-pattern",
+    "-pdf",
+    "-tutorial",
     ...intentNegativeOperators,
   ].join(" ");
   const productType = query.productType || query.categoryHint;
@@ -1510,6 +1713,57 @@ function getPreferenceMatchQuality({
   return "near";
 }
 
+function getMatchedConflictingDescriptorTerms(
+  productText: string,
+  titleText: string,
+  preferenceTerms: string[]
+): string[] {
+  const conflicts: string[] = [];
+  const normalizedPreferenceTerms = uniqueSearchTerms(preferenceTerms).map((term) =>
+    normalizeSearchText(term)
+  );
+  const expectedColorTerms = normalizedPreferenceTerms.filter((term) =>
+    COLOR_DESCRIPTOR_TERMS.has(term)
+  );
+  const matchedExpectedColor = expectedColorTerms.some((term) =>
+    containsSearchTermWithAliases(productText, term)
+  );
+
+  if (!matchedExpectedColor && expectedColorTerms.length > 0) {
+    for (const color of COLOR_DESCRIPTOR_TERMS) {
+      if (
+        !expectedColorTerms.includes(color) &&
+        containsSearchTermWithAliases(titleText, color)
+      ) {
+        conflicts.push(color);
+      }
+    }
+  }
+
+  for (const expectedTerm of normalizedPreferenceTerms) {
+    const conflictTerms = [
+      ...(FIT_DESCRIPTOR_CONFLICTS[expectedTerm] || []),
+      ...(MATERIAL_DESCRIPTOR_CONFLICTS[expectedTerm] || []),
+      ...(SCALE_DESCRIPTOR_CONFLICTS[expectedTerm] || []),
+    ];
+
+    if (
+      conflictTerms.length === 0 ||
+      containsSearchTermWithAliases(productText, expectedTerm)
+    ) {
+      continue;
+    }
+
+    conflicts.push(
+      ...conflictTerms.filter((term) =>
+        containsSearchTermWithAliases(titleText, term)
+      )
+    );
+  }
+
+  return uniqueSearchTerms(conflicts);
+}
+
 function evaluateProductIntentMatch({
   candidate,
   title,
@@ -1619,6 +1873,34 @@ function evaluateProductIntentMatch({
       productText,
       importantDescriptorTerms
     );
+    const matchedConflictingDescriptorTerms =
+      getMatchedConflictingDescriptorTerms(
+        productText,
+        titleText,
+        importantDescriptorTerms
+      );
+
+    if (matchedConflictingDescriptorTerms.length > 0) {
+      return {
+        quality: "reject",
+        reason: "conflicting_structured_preferences",
+        matchedDescriptors: matchedConflictingDescriptorTerms,
+        descriptorTokens: importantDescriptorTerms,
+      };
+    }
+
+    if (
+      importantDescriptorTerms.length >= 2 &&
+      matchedImportantDescriptorTerms.length === 0
+    ) {
+      return {
+        quality: "reject",
+        reason: "missing_structured_preferences",
+        matchedDescriptors: matchedImportantDescriptorTerms,
+        descriptorTokens: importantDescriptorTerms,
+      };
+    }
+
     const quality = getPreferenceMatchQuality({
       preferenceTerms: importantDescriptorTerms,
       matchedPreferenceTerms: matchedImportantDescriptorTerms,
@@ -1632,10 +1914,10 @@ function evaluateProductIntentMatch({
         : []),
       ...(rawRequiredTerms.length > requiredTerms.length
         ? [
-            `soft_required:${getSoftIdentitySearchTerms(
-              candidate.requiredTerms
-            ).join(", ")}`,
-          ]
+          `soft_required:${getSoftIdentitySearchTerms(
+            candidate.requiredTerms
+          ).join(", ")}`,
+        ]
         : []),
       ...(matchedImportantDescriptorTerms.length > 0
         ? [`preferences:${matchedImportantDescriptorTerms.join(", ")}`]
@@ -1691,7 +1973,54 @@ function buildMensSearchPhrase(
   terms: Array<string | undefined>,
   productType: string
 ): string {
-  return ["men's", ...terms, productType]
+  const productTypeKey = normalizeSearchText(productType);
+  const seen = new Set<string>();
+  const uniqueTerms = terms.filter((term): term is string => {
+    const normalized = cleanText(term);
+    const key = normalizeSearchText(normalized || "");
+    if (!normalized || !key || key === productTypeKey || seen.has(key)) {
+      return false;
+    }
+
+    seen.add(key);
+    return true;
+  });
+
+  return ["men's", ...uniqueTerms, productType]
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function addDescriptorTermsToSearchPhrase(
+  base: string,
+  descriptorTerms: string[],
+  productType: string
+): string {
+  const normalizedBase = cleanText(base);
+  const uniqueDescriptorTerms = uniqueSearchTerms(descriptorTerms).filter(
+    (term) => !containsSearchTermWithAliases(normalizedBase || "", term)
+  );
+
+  if (!normalizedBase || uniqueDescriptorTerms.length === 0) {
+    return normalizedBase || "";
+  }
+
+  const descriptorText = uniqueDescriptorTerms.join(" ");
+  const productTypePattern = escapeRegex(productType.trim()).replace(/\s+/g, "\\s+");
+  const productTypeAtEnd = new RegExp(`\\b${productTypePattern}\\b\\s*$`, "i");
+  const productTypeMatch = normalizedBase.match(productTypeAtEnd);
+
+  if (!productTypeMatch || typeof productTypeMatch.index !== "number") {
+    return `${normalizedBase} ${descriptorText}`.replace(/\s+/g, " ").trim();
+  }
+
+  return [
+    normalizedBase.slice(0, productTypeMatch.index).trim(),
+    descriptorText,
+    normalizedBase.slice(productTypeMatch.index).trim(),
+  ]
     .filter(Boolean)
     .join(" ")
     .replace(/\s+/g, " ")
@@ -1729,7 +2058,8 @@ function buildIntentSearchPhrase(intent: ShoppingIntent): string {
     return base;
   }
 
-  return buildMensSearchPhrase(
+  return addDescriptorTermsToSearchPhrase(
+    base,
     missingDescriptorTerms.slice(0, 3),
     intent.product_type
   );
@@ -1950,9 +2280,9 @@ function buildSearchQueries(
   }
 
   for (const [index, piece] of missingPieces.slice(0, 4).entries()) {
-      if (queries.length >= MAX_SEARCH_QUERIES) {
-        break;
-      }
+    if (queries.length >= MAX_SEARCH_QUERIES) {
+      break;
+    }
 
     addQuery(piece, alignedCategories[index], "missing-piece", index);
   }
@@ -2100,6 +2430,41 @@ function extractJsonPriceField(html: string, keys: string[]): number | null {
   }
 
   return null;
+}
+
+function extractLooseUsdPriceFromHtml(html: string): number | null {
+  const sample = decodeHtmlEntities(
+    html
+      .slice(0, 400_000)
+      .replace(/\\u002[fF]/g, "/")
+      .replace(/\\"/g, '"')
+      .replace(/\\\//g, "/")
+  ).replace(/\s+/g, " ");
+  const contextualPatterns = [
+    /(?:price|sale|current|regular|final|now|product-price|productPrice)[^$]{0,140}\$\s*([1-9][0-9]{1,3}(?:,[0-9]{3})?(?:\.[0-9]{1,2})?)/gi,
+    /\$\s*([1-9][0-9]{1,3}(?:,[0-9]{3})?(?:\.[0-9]{1,2})?)[^$]{0,80}(?:price|sale|current|regular|final|now)/gi,
+  ];
+
+  for (const pattern of contextualPatterns) {
+    for (const match of sample.matchAll(pattern)) {
+      const price = extractPrice(match[1]);
+      if (price && price >= 5 && price <= 1500) {
+        return price;
+      }
+    }
+  }
+
+  const allPrices = Array.from(
+    sample.matchAll(/\$\s*([1-9][0-9]{1,3}(?:,[0-9]{3})?(?:\.[0-9]{1,2})?)/g)
+  )
+    .map((match) => extractPrice(match[1]))
+    .filter((price): price is number => Boolean(price && price >= 5 && price <= 1500));
+
+  if (allPrices.length === 0) {
+    return null;
+  }
+
+  return allPrices.sort((left, right) => left - right)[0];
 }
 
 function extractJsonLdBlocks(html: string): unknown[] {
@@ -2432,7 +2797,9 @@ function extractMetadataFromHtml(
       canonicalUrl
     ) ||
     extractImageFromHtml(html, canonicalUrl);
-  const price =
+  const hasProductUrlSignal =
+    hasProductLikePath(canonicalUrl) || hasProductLikePath(candidateUrl);
+  const structuredPrice =
     extractPrice(productNode?.offers) ||
     extractPrice(metaPrice) ||
     extractPrice(itempropPrice) ||
@@ -2449,6 +2816,9 @@ function extractMetadataFromHtml(
       "priceAmount",
       "amount",
     ]);
+  const price =
+    structuredPrice ||
+    (hasProductUrlSignal ? extractLooseUsdPriceFromHtml(html) : null);
   const priceCurrency =
     extractCurrency(productNode?.offers) ||
     extractCurrency(metaCurrency) ||
@@ -2459,14 +2829,12 @@ function extractMetadataFromHtml(
       "currencyCode",
     ]);
   const hasProductSchema = Boolean(productNode);
-  const hasProductUrlSignal =
-    hasProductLikePath(canonicalUrl) || hasProductLikePath(candidateUrl);
   const hasProductMeta = Boolean(
     metaBrand ||
-      metaPrice ||
-      itempropPrice ||
-      itempropImage ||
-      html.match(/itemtype=["']https?:\/\/schema\.org\/Product["']/i)
+    metaPrice ||
+    itempropPrice ||
+    itempropImage ||
+    html.match(/itemtype=["']https?:\/\/schema\.org\/Product["']/i)
   );
   const hasProductOgType = ogType?.toLowerCase() === "product";
   const commerceSignals = hasCommerceSignals(html);
@@ -2496,18 +2864,52 @@ function extractMetadataFromHtml(
   };
 }
 
-function sanitizeCandidateUrl(value: string): string | null {
+interface CandidateUrlSanitizeOptions {
+  allowDiscoveryPages?: boolean;
+}
+
+function sanitizeCandidateUrl(
+  value: string,
+  options: CandidateUrlSanitizeOptions = {}
+): string | null {
   const normalized = normalizeUrl(value);
   if (
     !normalized ||
     hasBlockedHost(normalized) ||
-    hasSearchLikePath(normalized) ||
     hasEditorialPath(normalized)
   ) {
     return null;
   }
 
+  if (hasSearchLikePath(normalized)) {
+    if (!options.allowDiscoveryPages || !isDiscoveryListingPath(normalized)) {
+      return null;
+    }
+  }
+
   return normalized;
+}
+
+function hasNoisyDiscoveryCandidateSignal({
+  url,
+  title,
+  avoidTerms,
+}: {
+  url: string;
+  title?: string;
+  avoidTerms: string[];
+}): boolean {
+  const candidateText = `${url} ${title || ""}`;
+  return (
+    Boolean(getNonWearableProductReason(candidateText)) ||
+    getMatchedSearchTerms(candidateText, avoidTerms).length > 0
+  );
+}
+
+function getCandidateKindForUrl(
+  value: string
+): ProductCandidate["candidateKind"] {
+  return isDiscoveryListingPath(value) ? "discovery-page" : "product";
 }
 
 function rankCandidateUrl(queryIndex: number, resultIndex: number, url: string): number {
@@ -2550,6 +2952,7 @@ function buildCandidateRejectionLog(
     reason,
     provider: candidate.provider,
     url: compactUrlForLog(candidate.url),
+    candidateKind: candidate.candidateKind,
     category: candidate.categoryHint,
     querySource: candidate.querySource,
     querySourceIndex: candidate.querySourceIndex,
@@ -2580,6 +2983,7 @@ function summarizeCandidateRejectionForLog(
     reason: rejection.reason,
     provider: rejection.provider,
     url: rejection.url,
+    candidateKind: rejection.candidateKind,
     category: rejection.category,
     querySource: rejection.querySource,
     querySourceIndex: rejection.querySourceIndex,
@@ -2590,10 +2994,10 @@ function summarizeCandidateRejectionForLog(
     rank: rejection.rank,
     evidence: rejection.evidence
       ? Object.entries(rejection.evidence)
-          .map(
-            ([key, value]) => `${key}=${formatRejectionEvidenceValue(value)}`
-          )
-          .join("; ")
+        .map(
+          ([key, value]) => `${key}=${formatRejectionEvidenceValue(value)}`
+        )
+        .join("; ")
       : undefined,
   };
 }
@@ -2769,6 +3173,14 @@ function auditFetchedProductPage({
     return "missing_title";
   }
 
+  if (hasBadProductTitleSignal(title)) {
+    return "bad_product_title";
+  }
+
+  if (hasEditorialTitleSignal(title)) {
+    return "editorial_title";
+  }
+
   if (!imageUrl) {
     return "missing_image";
   }
@@ -2854,7 +3266,12 @@ async function fetchProductMetadata(
 
     const html = await response.text();
     const metadata = extractMetadataFromHtml(html, candidate.url, response.url);
-    const title = metadata.title || candidate.titleHint || null;
+    const title =
+      metadata.title && !hasBadProductTitleSignal(metadata.title)
+        ? metadata.title
+        : candidate.titleHint && !hasBadProductTitleSignal(candidate.titleHint)
+          ? candidate.titleHint
+          : metadata.title || candidate.titleHint || null;
     const retailer =
       metadata.retailer ||
       candidate.retailerHint ||
@@ -2942,6 +3359,221 @@ async function fetchProductMetadata(
   }
 }
 
+function decodeHtmlUrlValue(value: string): string {
+  return value
+    .replace(/\\u002[fF]/g, "/")
+    .replace(/\\\//g, "/")
+    .replace(/&amp;/gi, "&")
+    .replace(/&#38;/g, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/g, "'")
+    .trim();
+}
+
+function normalizeDiscoveredProductLink(
+  value: string,
+  baseUrl: string,
+  avoidTerms: string[] = []
+): string | null {
+  const decoded = decodeHtmlUrlValue(value);
+
+  if (
+    !decoded ||
+    decoded.startsWith("#") ||
+    decoded.startsWith("mailto:") ||
+    decoded.startsWith("tel:") ||
+    decoded.startsWith("javascript:")
+  ) {
+    return null;
+  }
+
+  const absoluteUrl = toAbsoluteUrl(decoded, baseUrl);
+  if (!absoluteUrl || ASSET_URL_EXTENSION_PATTERN.test(absoluteUrl)) {
+    return null;
+  }
+
+  if (
+    getNonWearableProductReason(absoluteUrl) ||
+    getMatchedSearchTerms(absoluteUrl, avoidTerms).length > 0
+  ) {
+    return null;
+  }
+
+  const sanitizedUrl = sanitizeCandidateUrl(absoluteUrl);
+  if (!sanitizedUrl || !hasProductLikePath(sanitizedUrl)) {
+    return null;
+  }
+
+  return sanitizedUrl;
+}
+
+function extractProductLinksFromHtml(
+  html: string,
+  baseUrl: string,
+  limit: number,
+  avoidTerms: string[] = []
+): string[] {
+  const links: string[] = [];
+  const seen = new Set<string>();
+
+  const addLink = (value: string) => {
+    if (links.length >= limit) {
+      return;
+    }
+
+    const productUrl = normalizeDiscoveredProductLink(value, baseUrl, avoidTerms);
+    if (!productUrl || seen.has(productUrl)) {
+      return;
+    }
+
+    seen.add(productUrl);
+    links.push(productUrl);
+  };
+
+  const htmlSample = html.slice(0, 700_000);
+  const quotedHrefPattern = /<a\b[^>]*\bhref\s*=\s*(["'])(.*?)\1/gi;
+  let quotedHrefMatch: RegExpExecArray | null;
+  while (
+    links.length < limit &&
+    (quotedHrefMatch = quotedHrefPattern.exec(htmlSample))
+  ) {
+    addLink(quotedHrefMatch[2] || "");
+  }
+
+  const unquotedHrefPattern = /<a\b[^>]*\bhref\s*=\s*([^"'\s>]+)/gi;
+  let unquotedHrefMatch: RegExpExecArray | null;
+  while (
+    links.length < limit &&
+    (unquotedHrefMatch = unquotedHrefPattern.exec(htmlSample))
+  ) {
+    addLink(unquotedHrefMatch[1] || "");
+  }
+
+  const normalizedHtmlSample = htmlSample
+    .replace(/\\u002[fF]/g, "/")
+    .replace(/\\\//g, "/");
+  const embeddedProductUrlPattern =
+    /https?:\/\/[^"'<>\\\s]+(?:\/listing\/|\/listings\/|\/product\/|\/products\/|\/p\/|\/dp\/|\/item\/|\/items\/|\/sku\/|\/prod\/)[^"'<>\\\s]*/gi;
+  let embeddedUrlMatch: RegExpExecArray | null;
+  while (
+    links.length < limit &&
+    (embeddedUrlMatch = embeddedProductUrlPattern.exec(normalizedHtmlSample))
+  ) {
+    addLink(embeddedUrlMatch[0] || "");
+  }
+
+  return links;
+}
+
+async function expandDiscoveryPageCandidate(
+  candidate: ProductCandidate,
+  onRejection?: (rejection: ProductCandidateRejectionLog) => void
+): Promise<ProductCandidate[]> {
+  const rejectDiscoveryPage = (
+    reason: string,
+    evidence: ProductCandidateRejectionEvidence = {}
+  ) => {
+    onRejection?.(buildCandidateRejectionLog(candidate, reason, evidence));
+    return [];
+  };
+
+  try {
+    const response = await fetch(candidate.url, {
+      headers: FETCH_HEADERS,
+      redirect: "follow",
+      cache: "no-store",
+      signal: AbortSignal.timeout(CANDIDATE_FETCH_TIMEOUT_MS),
+    });
+
+    if (!response.ok) {
+      return rejectDiscoveryPage("discovery_http_error", {
+        status: response.status,
+        contentType: response.headers.get("content-type")?.slice(0, 80) || null,
+      });
+    }
+
+    const contentType = response.headers.get("content-type") || "";
+    if (!contentType.includes("text/html")) {
+      return rejectDiscoveryPage("discovery_non_html_response", {
+        contentType: contentType.slice(0, 80) || null,
+      });
+    }
+
+    const html = await response.text();
+    const responseUrl = response.url || candidate.url;
+    const productUrls = extractProductLinksFromHtml(
+      html,
+      responseUrl,
+      DISCOVERY_PAGE_LINK_LIMIT,
+      candidate.avoidTerms
+    );
+
+    if (productUrls.length === 0) {
+      return rejectDiscoveryPage("discovery_no_product_links", {
+        responseUrl: compactUrlForLog(responseUrl),
+        contentLength: html.length,
+      });
+    }
+
+    return productUrls.map((productUrl, index) => ({
+      ...candidate,
+      url: productUrl,
+      candidateKind: "product",
+      discoveryParentUrl: candidate.url,
+      titleHint: undefined,
+      imageHint: undefined,
+      priceHint: undefined,
+      rank: candidate.rank + 0.25 + index / 100,
+    }));
+  } catch (error) {
+    return rejectDiscoveryPage("discovery_fetch_failed", {
+      error: error instanceof Error ? error.name : typeof error,
+    });
+  }
+}
+
+async function expandDiscoveryPageCandidates(
+  candidates: ProductCandidate[],
+  onRejection?: (rejection: ProductCandidateRejectionLog) => void
+): Promise<{
+  candidates: ProductCandidate[];
+  discoveryPages: number;
+  expandedDiscoveryPages: number;
+  extractedProductLinks: number;
+  skippedDiscoveryPages: number;
+}> {
+  const directCandidates = candidates.filter(
+    (candidate) => candidate.candidateKind !== "discovery-page"
+  );
+  const discoveryCandidates = candidates.filter(
+    (candidate) => candidate.candidateKind === "discovery-page"
+  );
+  const discoveryCandidatesToExpand = discoveryCandidates.slice(
+    0,
+    DISCOVERY_PAGE_EXPANSION_LIMIT
+  );
+  const expandedGroups = await Promise.all(
+    discoveryCandidatesToExpand.map((candidate) =>
+      expandDiscoveryPageCandidate(candidate, onRejection)
+    )
+  );
+  const expandedCandidates = expandedGroups.flat();
+  const validationCandidates = limitCandidatesByHost(
+    dedupeCandidates([...directCandidates, ...expandedCandidates]),
+    VALIDATION_CANDIDATE_HOST_LIMIT
+  ).slice(0, VALIDATION_CANDIDATE_LIMIT);
+
+  return {
+    candidates: validationCandidates,
+    discoveryPages: discoveryCandidates.length,
+    expandedDiscoveryPages: expandedGroups.filter((group) => group.length > 0)
+      .length,
+    extractedProductLinks: expandedCandidates.length,
+    skippedDiscoveryPages:
+      discoveryCandidates.length - discoveryCandidatesToExpand.length,
+  };
+}
+
 async function searchWithBrave(
   queries: SearchQuery[],
   onProgress?: ProductSearchProgressReporter
@@ -2973,8 +3605,8 @@ async function searchWithBrave(
           discoveryQueries.map(async (discoveryQuery, variantIndex) => {
             const variantCandidates: ProductCandidate[] = [];
             const searchParams = new URLSearchParams({
-                q: discoveryQuery,
-                  count: BRAVE_RESULTS_PER_QUERY,
+              q: discoveryQuery,
+              count: BRAVE_RESULTS_PER_QUERY,
               country: "us",
               search_lang: "en",
               ui_lang: "en-US",
@@ -3019,14 +3651,29 @@ async function searchWithBrave(
             const rawResults = data.web?.results || [];
 
             for (const [resultIndex, result] of rawResults.entries()) {
-              const sanitizedUrl = sanitizeCandidateUrl(String(result.url || ""));
+              const sanitizedUrl = sanitizeCandidateUrl(String(result.url || ""), {
+                allowDiscoveryPages: true,
+              });
               if (!sanitizedUrl) {
+                continue;
+              }
+
+              const titleHint =
+                cleanText(result.title || undefined) || undefined;
+              if (
+                hasNoisyDiscoveryCandidateSignal({
+                  url: sanitizedUrl,
+                  title: titleHint,
+                  avoidTerms: query.avoidTerms,
+                })
+              ) {
                 continue;
               }
 
               variantCandidates.push({
                 url: sanitizedUrl,
-                titleHint: cleanText(result.title || undefined) || undefined,
+                candidateKind: getCandidateKindForUrl(sanitizedUrl),
+                titleHint,
                 retailerHint:
                   cleanText(result.profile?.name || result.meta_url?.hostname) ||
                   undefined,
@@ -3216,15 +3863,31 @@ async function searchWithGoogleCse(
             rawResultsSeen += rawResults.length;
 
             for (const [resultIndex, result] of rawResults.entries()) {
-              const sanitizedUrl = sanitizeCandidateUrl(String(result.link || ""));
+              const sanitizedUrl = sanitizeCandidateUrl(String(result.link || ""), {
+                allowDiscoveryPages: true,
+              });
               if (!sanitizedUrl) {
+                filteredCandidates += 1;
+                continue;
+              }
+
+              const titleHint =
+                cleanText(result.title || undefined) || undefined;
+              if (
+                hasNoisyDiscoveryCandidateSignal({
+                  url: sanitizedUrl,
+                  title: titleHint,
+                  avoidTerms: query.avoidTerms,
+                })
+              ) {
                 filteredCandidates += 1;
                 continue;
               }
 
               variantCandidates.push({
                 url: sanitizedUrl,
-                titleHint: cleanText(result.title || undefined) || undefined,
+                candidateKind: getCandidateKindForUrl(sanitizedUrl),
+                titleHint,
                 retailerHint: cleanText(result.displayLink || undefined) || undefined,
                 categoryHint: query.categoryHint,
                 intentText: query.text,
@@ -3316,11 +3979,11 @@ async function searchWithGeminiUrlFinder(
 
 ${budgetLine}Queries:
 ${queries
-  .map(
-    (query, index) =>
-      `${index + 1}. ${query.text} [category=${query.categoryHint}; product_type=${query.productType || query.categoryHint}; required=${query.requiredTerms.join(", ") || "none"}; avoid=${query.avoidTerms.slice(0, 6).join(", ") || "none"}]`
-  )
-  .join("\n")}
+      .map(
+        (query, index) =>
+          `${index + 1}. ${query.text} [category=${query.categoryHint}; product_type=${query.productType || query.categoryHint}; required=${query.requiredTerms.join(", ") || "none"}; avoid=${query.avoidTerms.slice(0, 6).join(", ") || "none"}]`
+      )
+      .join("\n")}
 
 Return a JSON array only.
 Each item must be:
@@ -3368,6 +4031,8 @@ Rules:
         if (!sanitizedUrl) {
           return null;
         }
+        const titleHint =
+          cleanText(String(entry.title_hint || "")) || undefined;
 
         const categoryHint = inferCategoryHint(
           String(entry.category || queries[0]?.categoryHint || "")
@@ -3378,10 +4043,20 @@ Rules:
             ? queries[queryIndex - 1]
             : queries.find((query) => query.categoryHint === categoryHint) ||
               queries[0];
+        if (
+          hasNoisyDiscoveryCandidateSignal({
+            url: sanitizedUrl,
+            title: titleHint,
+            avoidTerms: sourceQuery?.avoidTerms || [],
+          })
+        ) {
+          return null;
+        }
 
         return {
           url: sanitizedUrl,
-          titleHint: cleanText(String(entry.title_hint || "")) || undefined,
+          candidateKind: "product" as const,
+          titleHint,
           retailerHint: cleanText(String(entry.retailer_hint || "")) || undefined,
           imageHint:
             normalizeUrl(String(entry.image_url_hint || "")) || undefined,
@@ -3448,6 +4123,31 @@ function dedupeCandidates(candidates: ProductCandidate[]): ProductCandidate[] {
   return deduped.sort((left, right) => left.rank - right.rank);
 }
 
+function limitCandidatesByHost(
+  candidates: ProductCandidate[],
+  maxPerHost: number
+): ProductCandidate[] {
+  const hostCounts = new Map<string, number>();
+  const limited: ProductCandidate[] = [];
+
+  for (const candidate of candidates) {
+    const hostname = getCandidateHostname(candidate.url);
+    const hostLimit = hasKnownFetchBlockedHost(candidate.url)
+      ? Math.min(1, maxPerHost)
+      : maxPerHost;
+    const currentHostCount = hostCounts.get(hostname) || 0;
+
+    if (currentHostCount >= hostLimit) {
+      continue;
+    }
+
+    hostCounts.set(hostname, currentHostCount + 1);
+    limited.push(candidate);
+  }
+
+  return limited;
+}
+
 function selectCandidatesByIntent(
   candidates: ProductCandidate[],
   limit: number
@@ -3456,12 +4156,20 @@ function selectCandidatesByIntent(
   const selected: ProductCandidate[] = [];
   const selectedUrls = new Set<string>();
   const hostCounts = new Map<string, number>();
+  let selectedDiscoveryPages = 0;
 
   const trySelectCandidate = (
     candidate: ProductCandidate,
     maxPerHost: number
   ): boolean => {
     if (selected.length >= limit || selectedUrls.has(candidate.url)) {
+      return false;
+    }
+
+    if (
+      candidate.candidateKind === "discovery-page" &&
+      selectedDiscoveryPages >= DISCOVERY_PAGE_EXPANSION_LIMIT
+    ) {
       return false;
     }
 
@@ -3478,6 +4186,9 @@ function selectCandidatesByIntent(
     selectedUrls.add(candidate.url);
     hostCounts.set(hostname, currentHostCount + 1);
     selected.push(candidate);
+    if (candidate.candidateKind === "discovery-page") {
+      selectedDiscoveryPages += 1;
+    }
 
     return true;
   };
@@ -3494,6 +4205,20 @@ function selectCandidatesByIntent(
   const groupedCandidates = Array.from(groups.values())
     .map((group) => group.sort((left, right) => left.rank - right.rank))
     .sort((left, right) => (left[0]?.rank || 0) - (right[0]?.rank || 0));
+
+  for (const group of groupedCandidates) {
+    if (selectedDiscoveryPages >= DISCOVERY_PAGE_EXPANSION_LIMIT) {
+      break;
+    }
+
+    const discoveryCandidate = group.find(
+      (candidate) => candidate.candidateKind === "discovery-page"
+    );
+
+    if (discoveryCandidate) {
+      trySelectCandidate(discoveryCandidate, 2);
+    }
+  }
 
   const groupIndexes = new Array(groupedCandidates.length).fill(0) as number[];
   while (selected.length < limit) {
@@ -3808,6 +4533,14 @@ async function discoverCandidates(
     rawCandidates: allCandidates.length,
     dedupedCandidates: dedupedCandidates.length,
     selectedCandidates: selectedCandidates.length,
+    rawByKind: countBy(
+      allCandidates,
+      (candidate) => candidate.candidateKind || "product"
+    ),
+    selectedByKind: countBy(
+      selectedCandidates,
+      (candidate) => candidate.candidateKind || "product"
+    ),
     rawByCategory: countBy(allCandidates, (candidate) => candidate.categoryHint),
     selectedByCategory: countBy(
       selectedCandidates,
@@ -3921,17 +4654,44 @@ export async function searchRealProducts(
     return [];
   }
 
+  const rejectedCandidates: ProductCandidateRejectionLog[] = [];
+  const expandedCandidates = await expandDiscoveryPageCandidates(
+    candidates,
+    (rejection) => {
+      rejectedCandidates.push(rejection);
+    }
+  );
+  console.log("[product-search] Discovery-page expansion complete", {
+    inputCandidates: candidates.length,
+    discoveryPages: expandedCandidates.discoveryPages,
+    expandedDiscoveryPages: expandedCandidates.expandedDiscoveryPages,
+    extractedProductLinks: expandedCandidates.extractedProductLinks,
+    skippedDiscoveryPages: expandedCandidates.skippedDiscoveryPages,
+    validationCandidates: expandedCandidates.candidates.length,
+    validationByKind: countBy(
+      expandedCandidates.candidates,
+      (candidate) => candidate.candidateKind || "product"
+    ),
+    validationByHost: countBy(expandedCandidates.candidates, (candidate) =>
+      getCandidateHostname(candidate.url)
+    ),
+  });
+
+  if (expandedCandidates.candidates.length === 0) {
+    console.warn("[product-search] No product candidates available after expansion");
+    return [];
+  }
+
   onProgress?.({
     type: "progress",
     stage: "vetting",
     status: "active",
     detail: "Fetching and validating candidate product pages.",
-    counts: { totalCandidates: candidates.length },
+    counts: { totalCandidates: expandedCandidates.candidates.length },
   });
   let vettedCandidates = 0;
-  const rejectedCandidates: ProductCandidateRejectionLog[] = [];
   const resolved = await Promise.allSettled(
-    candidates.map(async (candidate) => {
+    expandedCandidates.candidates.map(async (candidate) => {
       const product = await fetchProductMetadata(candidate, (rejection) => {
         rejectedCandidates.push(rejection);
       });
@@ -3947,7 +4707,7 @@ export async function searchRealProducts(
           : "Rejected a weak or mismatched candidate.",
         counts: {
           vettedCandidates,
-          totalCandidates: candidates.length,
+          totalCandidates: expandedCandidates.candidates.length,
         },
       });
       return product;
@@ -3971,6 +4731,12 @@ export async function searchRealProducts(
       totalRejected: rejectedCandidates.length,
       byReason: countBy(rejectedCandidates, (rejection) => rejection.reason),
       byProvider: countBy(rejectedCandidates, (rejection) => rejection.provider),
+      byIntent: countBy(
+        rejectedCandidates,
+        (rejection) =>
+          rejection.intentId ||
+          `${rejection.querySource}:${rejection.querySourceIndex}`
+      ),
       sampleRejections: rejectedCandidates
         .slice(0, CANDIDATE_REJECTION_LOG_SAMPLE_SIZE)
         .map(summarizeCandidateRejectionForLog),
@@ -3985,6 +4751,10 @@ export async function searchRealProducts(
   console.log("[product-search] Live products before diversity", {
     acceptedProducts: products.length,
     dedupedProducts: dedupedProducts.length,
+    acceptedByIntent: countBy(
+      products,
+      (product) => product.intent_id || "unknown"
+    ),
     acceptedByCategory: countBy(
       sortedProducts,
       (product) =>
@@ -4013,10 +4783,17 @@ export async function searchRealProducts(
   );
   console.log("[product-search] Candidate validation complete", {
     fetchedCandidates: resolved.length,
+    discoveryPages: expandedCandidates.discoveryPages,
+    expandedDiscoveryPages: expandedCandidates.expandedDiscoveryPages,
+    extractedProductLinks: expandedCandidates.extractedProductLinks,
     acceptedProducts: products.length,
     dedupedProducts: dedupedProducts.length,
     diversifiedProducts: diverseProducts.length,
     failedFetches,
+    acceptedByIntent: countBy(
+      products,
+      (product) => product.intent_id || "unknown"
+    ),
     acceptedByCategory: countBy(
       products,
       (product) =>
@@ -4036,7 +4813,7 @@ export async function searchRealProducts(
     "[product-search] Resolved",
     diverseProducts.length,
     "usable products from",
-    candidates.length,
+    expandedCandidates.candidates.length,
     "candidates"
   );
   onProgress?.({
